@@ -1,5 +1,4 @@
 /*
- *
  * connect to a pop3 mailbox and look at the message list.
  * if there is a message size above a certain threshold, output
  * a warning.
@@ -26,10 +25,11 @@ import (
 )
 
 type argDef struct {
-	Host string
-	User string
-	Pass string
-	Size int
+	Host  string
+	User  string
+	Pass  string
+	Size  int
+	Quota int
 }
 
 type Conn struct {
@@ -82,6 +82,7 @@ func getArgs() (*argDef, error) {
 	user := flag.String("user", "", "POP3 username")
 	passFile := flag.String("password-file", "", "POP3 password can be found in this file")
 	size := flag.Int("size", 5*1024*1024, "Message size (bytes) above which to warn.")
+	quota := flag.Int("quota", 10*1024*1024, "Size in bytes to above which to warn if the total size of all messages in the mailbox exceeds. This is to warn if we begin to reach quota due to many smaller messages.")
 	verbose := flag.Bool("verbose", false, "Verbose output or not.")
 	flag.Parse()
 	if len(*host) == 0 {
@@ -117,14 +118,21 @@ func getArgs() (*argDef, error) {
 		flag.PrintDefaults()
 		return nil, errors.New(errString)
 	}
+	if *quota <= 0 {
+		errString := "You must provide a quota larger than zero."
+		log.Print(errString)
+		flag.PrintDefaults()
+		return nil, errors.New(errString)
+	}
 	if *verbose {
 		verboseOutput = true
 	}
 	return &argDef{
-		Host: *host,
-		User: *user,
-		Pass: pass,
-		Size: *size,
+		Host:  *host,
+		User:  *user,
+		Pass:  pass,
+		Size:  *size,
+		Quota: *quota,
 	}, nil
 }
 
@@ -223,7 +231,9 @@ func (conn *Conn) writeLine(s string) error {
 
 // checkMailbox connects to a POP3 mailbox and lists the messages.
 // if any are above the given warning size then log a warning.
-func checkMailbox(host string, user string, pass string, warnSize int) error {
+func checkMailbox(host string, user string, pass string, warnSize int,
+	quotaWarnSize int) error {
+	// connect
 	if verboseOutput {
 		log.Printf("Connecting to %s...", host)
 	}
@@ -239,6 +249,7 @@ func checkMailbox(host string, user string, pass string, warnSize int) error {
 			rawConn.RemoteAddr().String())
 	}
 	conn := newConn(rawConn)
+
 	// ensure we get OK line before we do anything.
 	lines, err := conn.readLines(func(s string) bool {
 		return strings.HasPrefix(s, "+OK")
@@ -255,6 +266,7 @@ func checkMailbox(host string, user string, pass string, warnSize int) error {
 		log.Printf("Greeting line is not OK: %s", lines[0])
 		return errors.New("Invalid greeting")
 	}
+
 	// try to log in now.
 	s := fmt.Sprintf("USER %s", user)
 	err = conn.writeLine(s)
@@ -293,6 +305,7 @@ func checkMailbox(host string, user string, pass string, warnSize int) error {
 		log.Printf("Unexpected PASS response")
 		return errors.New("Unexpected PASS respose")
 	}
+
 	// now list messages.
 	err = conn.writeLine("LIST")
 	lines, err = conn.readLines(func(s string) bool {
@@ -302,16 +315,19 @@ func checkMailbox(host string, user string, pass string, warnSize int) error {
 		log.Printf("Failed to list messages: %s", err.Error())
 		return err
 	}
+	sizeOfAllMessages := 0
 	for _, line := range lines {
 		if verboseOutput {
 			log.Printf("Read LIST line: %s", line)
 		}
+
 		// +OK is the first line.
 		// . is the end line.
 		// all others are messages.
 		if strings.HasPrefix(line, "+OK") || line == "." {
 			continue
 		}
+
 		var id int
 		var size int
 		countScanned, err := fmt.Sscanf(line, "%d %d", &id, &size)
@@ -323,10 +339,19 @@ func checkMailbox(host string, user string, pass string, warnSize int) error {
 			log.Printf("LIST line not fully parsed: %s", line)
 			return errors.New("Failed to parse LIST line")
 		}
+
 		if size > warnSize {
 			log.Printf("Warning: Message %d has size %d",
 				id, size)
 		}
+		sizeOfAllMessages += size
+	}
+
+	if verboseOutput {
+		log.Printf("Total size of mailbox: %d", sizeOfAllMessages)
+	}
+	if sizeOfAllMessages > quotaWarnSize {
+		log.Printf("Warning: Mailbox has total used size: %d", sizeOfAllMessages)
 	}
 	return nil
 }
@@ -337,7 +362,7 @@ func main() {
 	if err != nil {
 		os.Exit(1)
 	}
-	err = checkMailbox(args.Host, args.User, args.Pass, args.Size)
+	err = checkMailbox(args.Host, args.User, args.Pass, args.Size, args.Quota)
 	if err != nil {
 		os.Exit(1)
 	}
