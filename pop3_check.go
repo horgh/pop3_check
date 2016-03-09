@@ -1,10 +1,12 @@
 /*
- * connect to a pop3 mailbox and look at the message list.
- * if there is a message size above a certain threshold, output
+ * Check a POP3 mailbox for large messages and quota issues.
+ *
+ * Connect to a pop3 mailbox and look at the message list.
+ * If there is a message size above a certain threshold, output
  * a warning.
  *
- * why? because I have a pop3 mailbox that gets polled by gmail
- * which then downloads all the messages. however it appears gmail
+ * Why? Because I have a POP3 mailbox that gets polled by gmail
+ * which then downloads all the messages. However it appears gmail
  * will not download messages if they are above a certain size
  * and the mailbox can then fill up leading to message rejection.
  * this is to notify about that situation.
@@ -259,7 +261,7 @@ func checkMailbox(host string, user string, pass string, warnSize int,
 		return err
 	}
 	if len(lines) != 1 {
-		log.Printf("Unexpected number of lines: %s", len(lines))
+		log.Printf("Unexpected number of lines: %d", len(lines))
 		return errors.New("Unexpected line count")
 	}
 	if !strings.HasPrefix(lines[0], "+OK ") {
@@ -340,18 +342,24 @@ func checkMailbox(host string, user string, pass string, warnSize int,
 			return errors.New("Failed to parse LIST line")
 		}
 
+		if verboseOutput {
+			log.Printf("Found message %d (%d bytes)", id, size)
+		}
+
 		if size > warnSize {
-			log.Printf("Warning: Message %d has size %d",
+			log.Printf("Warning: Message %d has size %d bytes",
 				id, size)
 		}
 		sizeOfAllMessages += size
 	}
 
 	if verboseOutput {
-		log.Printf("Total size of mailbox: %d", sizeOfAllMessages)
+		log.Printf("Total size of mailbox: %d bytes", sizeOfAllMessages)
 	}
+
 	if sizeOfAllMessages > quotaWarnSize {
-		log.Printf("Warning: Mailbox has total used size: %d", sizeOfAllMessages)
+		log.Printf("Warning: Mailbox has total used size: %d bytes",
+			sizeOfAllMessages)
 	}
 	return nil
 }
